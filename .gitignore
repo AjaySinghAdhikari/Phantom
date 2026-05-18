@@ -1,0 +1,49 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.env
+venv/
+.venv/
+*.egg-info/
+
+# Database
+*.db
+*.sqlite
+*.sqlite3
+
+# Node.js
+node_modules/
+dist/
+build/
+.next/
+
+# Vite
+dist-ssr/
+*.local
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# IDE
+.vscode/
+.idea/
+*.suo
+*.swp
+
+# Logs
+*.log
+logs/
+npm-debug.log*
+
+# Environment
+.env.local
+.env.production
+
+# Keep these ↓
+!.env.example
+!requirements.txt
+!package.json
