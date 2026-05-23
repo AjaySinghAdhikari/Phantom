@@ -21,7 +21,7 @@ Your App  →→→  👻 Phantom (port 8080)  →→→  Real Backend
 
 ---
 
-## The Problem It Solves
+## The Solution we are aiming for:
 
 | Situation | Without Phantom | With Phantom |
 |---|---|---|
