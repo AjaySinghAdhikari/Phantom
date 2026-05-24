@@ -1,119 +1,164 @@
-import os
-import json
-import time
-from datetime import datetime, timezone
-from fastapi import FastAPI, Request, Response
-import httpx
-from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker
-from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
-from sqlalchemy import Text, Integer, DateTime
+from fastapi import FastAPI, Request
+from fastapi.responses import JSONResponse
+from fastapi.middleware.cors import CORSMiddleware
+from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
+from sqlalchemy.orm import declarative_base, sessionmaker
+from sqlalchemy import Column, Integer, String, Float, DateTime, Text
 from dotenv import load_dotenv
+import httpx
+import os
+import time
+import asyncio
+import datetime
 
-# Load environment variables from .env file
 load_dotenv()
 
-TARGET_URL = os.getenv("TARGET_URL", "http://localhost:8000")
+TARGET_URL = os.getenv("TARGET_URL", "https://jsonplaceholder.typicode.com").rstrip("/")
 
-# Database setup
-DB_PATH = os.path.join(os.path.dirname(__file__), "phantom.db")
-DATABASE_URL = f"sqlite+aiosqlite:///{DB_PATH}"
-
+DATABASE_URL = "sqlite+aiosqlite:///./phantom.db"
 engine = create_async_engine(DATABASE_URL, echo=False)
-AsyncSessionLocal = async_sessionmaker(bind=engine, expire_on_commit=False)
+Base = declarative_base()
+AsyncSessionLocal = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
 
-class Base(DeclarativeBase):
-    pass
+class TrafficLog(Base):
+    __tablename__ = "traffic_logs"
+    id            = Column(Integer, primary_key=True, index=True)
+    timestamp     = Column(DateTime, default=datetime.datetime.utcnow)
+    method        = Column(String)
+    path          = Column(String)
+    req_headers   = Column(Text)
+    req_body      = Column(Text)
+    res_status    = Column(Integer)
+    res_body      = Column(Text)
+    res_time_ms   = Column(Float)
 
-class ProxyLog(Base):
-    __tablename__ = "proxy_logs"
-    
-    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
-    timestamp: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(timezone.utc))
-    method: Mapped[str] = mapped_column(Text)
-    path: Mapped[str] = mapped_column(Text)
-    req_headers: Mapped[str] = mapped_column(Text) # JSON string
-    req_body: Mapped[str] = mapped_column(Text)
-    res_status: Mapped[int] = mapped_column(Integer)
-    res_body: Mapped[str] = mapped_column(Text)
-    res_time_ms: Mapped[int] = mapped_column(Integer)
+# ── Chaos config (lives in memory) ──────────────────────────────
+chaos_config = {
+    "enabled": False,
+    "latency_ms": 0,       # artificial delay in ms
+    "error_code": None,    # if set, return this status instead of forwarding
+    "path_filter": "",     # if set, only apply chaos to paths containing this string
+}
 
-app = FastAPI(title="Phantom Proxy")
+app = FastAPI()
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 @app.on_event("startup")
-async def startup_event():
-    # Create tables if they don't exist
+async def startup():
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
 
-@app.api_route("/{path:path}", methods=["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS", "HEAD"])
-async def proxy(request: Request, path: str):
-    start_time = time.time()
-    
-    # Read request data
-    body_bytes = await request.body()
-    req_body_text = body_bytes.decode("utf-8", errors="replace")
-    req_headers = dict(request.headers)
-    
-    # Drop headers that shouldn't be forwarded (e.g., Host)
-    forward_headers = {k: v for k, v in req_headers.items() if k.lower() not in ["host", "content-length"]}
-    
-    # Construct target URL
-    target = f"{TARGET_URL.rstrip('/')}/{path}"
-    if request.url.query:
-        target += f"?{request.url.query}"
-        
-    async with httpx.AsyncClient() as client:
-        # Forward the request
-        try:
-            proxy_response = await client.request(
-                method=request.method,
-                url=target,
-                headers=forward_headers,
-                content=body_bytes,
-                timeout=30.0
-            )
-            res_status = proxy_response.status_code
-            res_body_bytes = proxy_response.content
-            res_body_text = res_body_bytes.decode("utf-8", errors="replace")
-            res_headers = dict(proxy_response.headers)
-        except Exception as e:
-            # Handle connection errors to target
-            res_status = 502
-            res_body_text = str(e)
-            res_body_bytes = res_body_text.encode("utf-8")
-            res_headers = {}
+# ── Chaos endpoints ──────────────────────────────────────────────
+@app.get("/api/chaos")
+async def get_chaos():
+    return chaos_config
 
-    end_time = time.time()
-    res_time_ms = int((end_time - start_time) * 1000)
-    
-    # Save to DB asynchronously
-    async with AsyncSessionLocal() as session:
-        log_entry = ProxyLog(
-            timestamp=datetime.now(timezone.utc),
-            method=request.method,
-            path=request.url.path,
-            req_headers=json.dumps(req_headers),
-            req_body=req_body_text,
-            res_status=res_status,
-            res_body=res_body_text,
-            res_time_ms=res_time_ms
-        )
-        session.add(log_entry)
-        await session.commit()
-        
-    # Return the real response back untouched
-    # Filter out transfer headers that might cause issues with FastAPI's own Response
-    return_headers = {
-        k: v for k, v in res_headers.items() 
-        if k.lower() not in ["content-encoding", "transfer-encoding", "content-length"]
-    }
-    
-    return Response(
-        content=res_body_bytes,
-        status_code=res_status,
-        headers=return_headers
+@app.post("/api/chaos")
+async def set_chaos(request: Request):
+    body = await request.json()
+    chaos_config["enabled"]    = body.get("enabled", chaos_config["enabled"])
+    chaos_config["latency_ms"] = int(body.get("latency_ms", chaos_config["latency_ms"]))
+    chaos_config["error_code"] = body.get("error_code", chaos_config["error_code"])
+    chaos_config["path_filter"]= body.get("path_filter", chaos_config["path_filter"])
+    return chaos_config
+
+# ── Proxy catch-all ──────────────────────────────────────────────
+@app.api_route("/{path:path}", methods=["GET","POST","PUT","PATCH","DELETE","OPTIONS","HEAD"])
+async def proxy(request: Request, path: str):
+    import json
+
+    req_body = await request.body()
+    req_headers = dict(request.headers)
+    req_headers.pop("host", None)
+
+    full_path = "/" + path
+    if request.url.query:
+        full_path += "?" + request.url.query
+
+    # Skip chaos for internal /api/ routes
+    apply_chaos = (
+        chaos_config["enabled"]
+        and not path.startswith("api/")
     )
 
-if __name__ == "__main__":
-    import uvicorn
-    uvicorn.run("proxy:app", host="0.0.0.0", port=8080, reload=True)
+    # Check path filter
+    if apply_chaos and chaos_config["path_filter"]:
+        apply_chaos = chaos_config["path_filter"] in full_path
+
+    start = time.time()
+
+    # Apply latency
+    if apply_chaos and chaos_config["latency_ms"] > 0:
+        await asyncio.sleep(chaos_config["latency_ms"] / 1000)
+
+    # Apply error injection (skip real server)
+    if apply_chaos and chaos_config["error_code"]:
+        elapsed = round((time.time() - start) * 1000, 2)
+        fake_body = json.dumps({"error": f"Chaos injected {chaos_config['error_code']}", "phantom": True})
+
+        async with AsyncSessionLocal() as session:
+            log = TrafficLog(
+                method      = request.method,
+                path        = full_path,
+                req_headers = json.dumps(req_headers),
+                req_body    = req_body.decode("utf-8", errors="replace"),
+                res_status  = chaos_config["error_code"],
+                res_body    = fake_body,
+                res_time_ms = elapsed,
+            )
+            session.add(log)
+            await session.commit()
+
+        return JSONResponse(
+            content={"error": f"Chaos injected {chaos_config['error_code']}", "phantom": True},
+            status_code=chaos_config["error_code"],
+        )
+
+    # Normal proxy forward
+    try:
+        async with httpx.AsyncClient(follow_redirects=True, timeout=30) as client:
+            url = TARGET_URL + full_path
+            resp = await client.request(
+                method=request.method,
+                url=url,
+                headers=req_headers,
+                content=req_body,
+            )
+        elapsed = round((time.time() - start) * 1000, 2)
+
+        async with AsyncSessionLocal() as session:
+            log = TrafficLog(
+                method      = request.method,
+                path        = full_path,
+                req_headers = json.dumps(req_headers),
+                req_body    = req_body.decode("utf-8", errors="replace"),
+                res_status  = resp.status_code,
+                res_body    = resp.text[:5000],
+                res_time_ms = elapsed,
+            )
+            session.add(log)
+            await session.commit()
+
+        return JSONResponse(
+            content=resp.json() if "application/json" in resp.headers.get("content-type","") else {"body": resp.text},
+            status_code=resp.status_code,
+        )
+
+    except Exception as e:
+        elapsed = round((time.time() - start) * 1000, 2)
+        async with AsyncSessionLocal() as session:
+            log = TrafficLog(
+                method=request.method, path=full_path,
+                req_headers=json.dumps(req_headers),
+                req_body=req_body.decode("utf-8", errors="replace"),
+                res_status=502, res_body=str(e), res_time_ms=elapsed,
+            )
+            session.add(log)
+            await session.commit()
+        return JSONResponse({"error": str(e)}, status_code=502)
