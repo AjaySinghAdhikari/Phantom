@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useMemo } from "react";
 
 const API = "http://localhost:8000";
 
@@ -26,12 +26,25 @@ const timeAgo = (ts) => {
   return `${Math.floor(diff / 86400)}d ago`;
 };
 
+const STATUS_FILTERS = [
+  { label: "ALL", fn: () => true },
+  { label: "2xx", fn: (c) => c >= 200 && c < 300 },
+  { label: "3xx", fn: (c) => c >= 300 && c < 400 },
+  { label: "4xx", fn: (c) => c >= 400 && c < 500 },
+  { label: "5xx", fn: (c) => c >= 500 },
+];
+
 export default function App() {
   const [logs, setLogs] = useState([]);
-  const [stats, setStats] = useState({ total: 0, avg_response_time: 0 });
+  const [stats, setStats] = useState({ total_requests: 0, average_response_time_ms: 0, methods: {} });
   const [selected, setSelected] = useState(null);
   const [autoRefresh, setAutoRefresh] = useState(true);
   const [loading, setLoading] = useState(false);
+
+  // Filter state
+  const [search, setSearch] = useState("");
+  const [methodFilter, setMethodFilter] = useState("ALL");
+  const [statusFilter, setStatusFilter] = useState("ALL");
 
   const fetchData = useCallback(async () => {
     try {
@@ -53,13 +66,14 @@ export default function App() {
     await fetch(`${API}/api/logs`, { method: "DELETE" });
     setLogs([]);
     setSelected(null);
-    setStats({ total: 0, avg_response_time: 0 });
+    setStats({ total_requests: 0, average_response_time_ms: 0, methods: {} });
+    setSearch("");
+    setMethodFilter("ALL");
+    setStatusFilter("ALL");
     setLoading(false);
   };
 
-  useEffect(() => {
-    fetchData();
-  }, [fetchData]);
+  useEffect(() => { fetchData(); }, [fetchData]);
 
   useEffect(() => {
     if (!autoRefresh) return;
@@ -67,11 +81,22 @@ export default function App() {
     return () => clearInterval(interval);
   }, [autoRefresh, fetchData]);
 
-  const methodStyle = (method) => {
+  // Filtered logs — computed from all 3 filters together
+  const filteredLogs = useMemo(() => {
+    const statusFn = STATUS_FILTERS.find(f => f.label === statusFilter)?.fn || (() => true);
+    return logs.filter(log => {
+      const matchSearch = search === "" || log.path?.toLowerCase().includes(search.toLowerCase());
+      const matchMethod = methodFilter === "ALL" || log.method === methodFilter;
+      const matchStatus = statusFilter === "ALL" || statusFn(log.res_status);
+      return matchSearch && matchMethod && matchStatus;
+    });
+  }, [logs, search, methodFilter, statusFilter]);
+
+  const methodStyle = (method, active = false) => {
     const c = METHOD_COLORS[method] || { bg: "#2a2a3e", text: "#a78bfa", border: "#7c3aed" };
     return {
-      background: c.bg,
-      color: c.text,
+      background: active ? c.text : c.bg,
+      color: active ? "#000" : c.text,
       border: `1px solid ${c.border}`,
       borderRadius: "4px",
       padding: "2px 8px",
@@ -79,32 +104,31 @@ export default function App() {
       fontWeight: "600",
       fontFamily: "monospace",
       letterSpacing: "0.05em",
+      cursor: "pointer",
+      transition: "all 0.15s",
     };
   };
 
+  // Available methods from current logs
+  const availableMethods = useMemo(() => {
+    return ["ALL", ...new Set(logs.map(l => l.method).filter(Boolean))];
+  }, [logs]);
+
   return (
     <div style={{
-      display: "flex",
-      height: "100vh",
-      width: "100vw",
-      background: "#0d0d14",
-      color: "#e2e8f0",
+      display: "flex", height: "100vh", width: "100vw",
+      background: "#0d0d14", color: "#e2e8f0",
       fontFamily: "'JetBrains Mono', 'Fira Code', monospace",
       overflow: "hidden",
     }}>
 
       {/* ── Sidebar ── */}
       <aside style={{
-        width: "240px",
-        minWidth: "240px",
-        background: "#13131f",
-        borderRight: "1px solid #1e1e30",
-        display: "flex",
-        flexDirection: "column",
-        padding: "24px 16px",
-        gap: "24px",
+        width: "240px", minWidth: "240px",
+        background: "#13131f", borderRight: "1px solid #1e1e30",
+        display: "flex", flexDirection: "column",
+        padding: "24px 16px", gap: "24px",
       }}>
-        {/* Logo */}
         <div>
           <div style={{ fontSize: "22px", fontWeight: "700", color: "#fff", letterSpacing: "-0.5px" }}>
             👻 Phantom
@@ -114,19 +138,18 @@ export default function App() {
           </div>
         </div>
 
-        {/* Stats */}
         <div style={{ display: "flex", flexDirection: "column", gap: "10px" }}>
-          <StatCard label="Live Requests" value={stats.total || 0} />
-          <StatCard label="Avg Response" value={`${Math.round(stats.avg_response_time || 0)}ms`} />
+          <StatCard label="Live Requests" value={stats.total_requests || 0} />
+          <StatCard label="Avg Response" value={`${Math.round(stats.average_response_time_ms || 0)}ms`} />
+          <StatCard label="Showing" value={`${filteredLogs.length} / ${logs.length}`} />
         </div>
 
-        {/* Method breakdown */}
-        {stats.by_method && Object.keys(stats.by_method).length > 0 && (
+        {stats.methods && Object.keys(stats.methods).length > 0 && (
           <div>
             <div style={{ fontSize: "10px", color: "#4a4a6a", letterSpacing: "0.1em", marginBottom: "8px" }}>
               BY METHOD
             </div>
-            {Object.entries(stats.by_method).map(([method, count]) => (
+            {Object.entries(stats.methods).map(([method, count]) => (
               <div key={method} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "6px" }}>
                 <span style={methodStyle(method)}>{method}</span>
                 <span style={{ fontSize: "12px", color: "#6b7280" }}>{count}</span>
@@ -135,39 +158,22 @@ export default function App() {
           </div>
         )}
 
-        {/* Controls */}
         <div style={{ marginTop: "auto", display: "flex", flexDirection: "column", gap: "8px" }}>
-          <button
-            onClick={() => setAutoRefresh(!autoRefresh)}
-            style={{
-              background: autoRefresh ? "#1a3a1a" : "#1e1e2e",
-              color: autoRefresh ? "#34d399" : "#6b7280",
-              border: `1px solid ${autoRefresh ? "#059669" : "#2a2a3e"}`,
-              borderRadius: "6px",
-              padding: "8px 12px",
-              fontSize: "12px",
-              cursor: "pointer",
-              display: "flex",
-              alignItems: "center",
-              gap: "6px",
-            }}
-          >
+          <button onClick={() => setAutoRefresh(!autoRefresh)} style={{
+            background: autoRefresh ? "#1a3a1a" : "#1e1e2e",
+            color: autoRefresh ? "#34d399" : "#6b7280",
+            border: `1px solid ${autoRefresh ? "#059669" : "#2a2a3e"}`,
+            borderRadius: "6px", padding: "8px 12px", fontSize: "12px",
+            cursor: "pointer", display: "flex", alignItems: "center", gap: "6px",
+          }}>
             <span style={{ fontSize: "10px" }}>{autoRefresh ? "⬤" : "○"}</span>
             Auto-Refresh {autoRefresh ? "ON" : "OFF"}
           </button>
-          <button
-            onClick={clearLogs}
-            disabled={loading}
-            style={{
-              background: "#1e1a1a",
-              color: "#f87171",
-              border: "1px solid #3d1a1a",
-              borderRadius: "6px",
-              padding: "8px 12px",
-              fontSize: "12px",
-              cursor: "pointer",
-            }}
-          >
+          <button onClick={clearLogs} disabled={loading} style={{
+            background: "#1e1a1a", color: "#f87171",
+            border: "1px solid #3d1a1a", borderRadius: "6px",
+            padding: "8px 12px", fontSize: "12px", cursor: "pointer",
+          }}>
             🗑 Clear All Logs
           </button>
         </div>
@@ -176,70 +182,150 @@ export default function App() {
       {/* ── Main Panel ── */}
       <main style={{ flex: 1, display: "flex", flexDirection: "column", overflow: "hidden" }}>
 
-        {/* Header bar */}
+        {/* Header */}
         <div style={{
-          padding: "14px 24px",
-          borderBottom: "1px solid #1e1e30",
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "space-between",
+          padding: "12px 24px", borderBottom: "1px solid #1e1e30",
+          display: "flex", alignItems: "center", justifyContent: "space-between",
           background: "#13131f",
         }}>
           <span style={{ fontSize: "12px", color: "#4a4a6a", letterSpacing: "0.1em" }}>
             INTERCEPTED TRAFFIC
           </span>
-          <span style={{
-            fontSize: "11px",
-            color: autoRefresh ? "#34d399" : "#4a4a6a",
-            display: "flex", alignItems: "center", gap: "5px"
-          }}>
+          <span style={{ fontSize: "11px", color: autoRefresh ? "#34d399" : "#4a4a6a", display: "flex", alignItems: "center", gap: "5px" }}>
             {autoRefresh && <span style={{ animation: "pulse 1.5s infinite" }}>⬤</span>}
             {autoRefresh ? "Live" : "Paused"}
           </span>
         </div>
 
-        {/* Table + Detail panel */}
+        {/* ── Search + Filter Bar ── */}
+        <div style={{
+          padding: "10px 24px", borderBottom: "1px solid #1e1e30",
+          background: "#0f0f1a", display: "flex", alignItems: "center", gap: "12px", flexWrap: "wrap",
+        }}>
+          {/* Search box */}
+          <div style={{ position: "relative", flex: "1", minWidth: "160px", maxWidth: "280px" }}>
+            <span style={{ position: "absolute", left: "10px", top: "50%", transform: "translateY(-50%)", color: "#4a4a6a", fontSize: "12px" }}>
+              🔍
+            </span>
+            <input
+              type="text"
+              placeholder="Search paths..."
+              value={search}
+              onChange={e => setSearch(e.target.value)}
+              style={{
+                width: "100%", background: "#13131f", border: "1px solid #1e1e30",
+                borderRadius: "6px", padding: "6px 10px 6px 30px",
+                color: "#e2e8f0", fontSize: "12px", outline: "none",
+                fontFamily: "monospace",
+              }}
+            />
+            {search && (
+              <button onClick={() => setSearch("")} style={{
+                position: "absolute", right: "8px", top: "50%", transform: "translateY(-50%)",
+                background: "none", border: "none", color: "#4a4a6a", cursor: "pointer", fontSize: "12px",
+              }}>✕</button>
+            )}
+          </div>
+
+          {/* Divider */}
+          <div style={{ width: "1px", height: "20px", background: "#1e1e30" }} />
+
+          {/* Method filters */}
+          <div style={{ display: "flex", gap: "6px", alignItems: "center" }}>
+            <span style={{ fontSize: "10px", color: "#4a4a6a", letterSpacing: "0.1em" }}>METHOD</span>
+            {availableMethods.map(m => (
+              <button key={m} onClick={() => setMethodFilter(m)} style={{
+                background: methodFilter === m ? (m === "ALL" ? "#a78bfa" : METHOD_COLORS[m]?.text || "#a78bfa") : "#13131f",
+                color: methodFilter === m ? "#000" : (m === "ALL" ? "#a78bfa" : METHOD_COLORS[m]?.text || "#a78bfa"),
+                border: `1px solid ${m === "ALL" ? "#7c3aed" : METHOD_COLORS[m]?.border || "#7c3aed"}`,
+                borderRadius: "4px", padding: "3px 8px", fontSize: "11px",
+                fontWeight: "600", cursor: "pointer", fontFamily: "monospace",
+                transition: "all 0.15s",
+              }}>{m}</button>
+            ))}
+          </div>
+
+          {/* Divider */}
+          <div style={{ width: "1px", height: "20px", background: "#1e1e30" }} />
+
+          {/* Status filters */}
+          <div style={{ display: "flex", gap: "6px", alignItems: "center" }}>
+            <span style={{ fontSize: "10px", color: "#4a4a6a", letterSpacing: "0.1em" }}>STATUS</span>
+            {STATUS_FILTERS.map(f => {
+              const colors = {
+                ALL: { text: "#a78bfa", border: "#7c3aed" },
+                "2xx": { text: "#34d399", border: "#059669" },
+                "3xx": { text: "#60a5fa", border: "#2563eb" },
+                "4xx": { text: "#fb923c", border: "#ea580c" },
+                "5xx": { text: "#f87171", border: "#dc2626" },
+              };
+              const c = colors[f.label];
+              const active = statusFilter === f.label;
+              return (
+                <button key={f.label} onClick={() => setStatusFilter(f.label)} style={{
+                  background: active ? c.text : "#13131f",
+                  color: active ? "#000" : c.text,
+                  border: `1px solid ${c.border}`,
+                  borderRadius: "4px", padding: "3px 8px", fontSize: "11px",
+                  fontWeight: "600", cursor: "pointer", fontFamily: "monospace",
+                  transition: "all 0.15s",
+                }}>{f.label}</button>
+              );
+            })}
+          </div>
+
+          {/* Reset filters */}
+          {(search || methodFilter !== "ALL" || statusFilter !== "ALL") && (
+            <button onClick={() => { setSearch(""); setMethodFilter("ALL"); setStatusFilter("ALL"); }} style={{
+              background: "none", border: "1px solid #2a2a3e", borderRadius: "4px",
+              color: "#4a4a6a", fontSize: "11px", padding: "3px 8px", cursor: "pointer",
+              marginLeft: "auto",
+            }}>Reset</button>
+          )}
+        </div>
+
+        {/* Table + Detail */}
         <div style={{ flex: 1, display: "flex", overflow: "hidden" }}>
 
           {/* Traffic Table */}
           <div style={{ flex: 1, overflowY: "auto" }}>
-            {logs.length === 0 ? (
+            {filteredLogs.length === 0 ? (
               <div style={{
                 display: "flex", flexDirection: "column",
                 alignItems: "center", justifyContent: "center",
-                height: "100%", color: "#2a2a3e", gap: "12px"
+                height: "100%", color: "#2a2a3e", gap: "12px",
               }}>
                 <div style={{ fontSize: "48px" }}>👻</div>
-                <div style={{ fontSize: "14px" }}>No traffic recorded yet</div>
-                <div style={{ fontSize: "12px", color: "#1e1e30" }}>
-                  Visit http://localhost:8080/posts to capture traffic
+                <div style={{ fontSize: "14px" }}>
+                  {logs.length === 0 ? "No traffic recorded yet" : "No results match your filters"}
                 </div>
+                {logs.length > 0 && (
+                  <button onClick={() => { setSearch(""); setMethodFilter("ALL"); setStatusFilter("ALL"); }} style={{
+                    background: "none", border: "1px solid #2a2a3e", borderRadius: "6px",
+                    color: "#4a4a6a", fontSize: "12px", padding: "6px 12px", cursor: "pointer",
+                  }}>Clear filters</button>
+                )}
               </div>
             ) : (
               <table style={{ width: "100%", borderCollapse: "collapse" }}>
                 <thead>
-                  <tr style={{ background: "#0d0d14", position: "sticky", top: 0 }}>
+                  <tr style={{ background: "#0d0d14", position: "sticky", top: 0, zIndex: 1 }}>
                     {["Timestamp", "Method", "Path", "Status", "Time"].map(h => (
                       <th key={h} style={{
-                        padding: "10px 16px",
-                        textAlign: "left",
-                        fontSize: "10px",
-                        color: "#4a4a6a",
-                        letterSpacing: "0.1em",
-                        borderBottom: "1px solid #1e1e30",
-                        fontWeight: "500",
+                        padding: "10px 16px", textAlign: "left", fontSize: "10px",
+                        color: "#4a4a6a", letterSpacing: "0.1em",
+                        borderBottom: "1px solid #1e1e30", fontWeight: "500",
                       }}>{h.toUpperCase()}</th>
                     ))}
                   </tr>
                 </thead>
                 <tbody>
-                  {logs.map((log) => (
+                  {filteredLogs.map((log) => (
                     <tr
                       key={log.id}
                       onClick={() => setSelected(selected?.id === log.id ? null : log)}
                       style={{
-                        borderBottom: "1px solid #1a1a28",
-                        cursor: "pointer",
+                        borderBottom: "1px solid #1a1a28", cursor: "pointer",
                         background: selected?.id === log.id ? "#1a1a2e" : "transparent",
                         transition: "background 0.15s",
                       }}
@@ -253,7 +339,13 @@ export default function App() {
                         <span style={methodStyle(log.method)}>{log.method}</span>
                       </td>
                       <td style={{ padding: "10px 16px", fontSize: "12px", color: "#a0aec0", fontFamily: "monospace" }}>
-                        {log.path}
+                        {search ? (
+                          log.path.split(new RegExp(`(${search})`, "gi")).map((part, i) =>
+                            part.toLowerCase() === search.toLowerCase()
+                              ? <mark key={i} style={{ background: "#fbbf24", color: "#000", borderRadius: "2px" }}>{part}</mark>
+                              : part
+                          )
+                        ) : log.path}
                       </td>
                       <td style={{ padding: "10px 16px", fontSize: "13px", fontWeight: "600", color: getStatusColor(log.res_status) }}>
                         {log.res_status}
@@ -271,21 +363,16 @@ export default function App() {
           {/* Detail Panel */}
           {selected && (
             <div style={{
-              width: "380px",
-              minWidth: "380px",
-              borderLeft: "1px solid #1e1e30",
-              background: "#13131f",
-              overflowY: "auto",
-              padding: "20px",
-              display: "flex",
-              flexDirection: "column",
-              gap: "16px",
+              width: "380px", minWidth: "380px",
+              borderLeft: "1px solid #1e1e30", background: "#13131f",
+              overflowY: "auto", padding: "20px",
+              display: "flex", flexDirection: "column", gap: "16px",
             }}>
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
                 <span style={{ fontSize: "11px", color: "#4a4a6a", letterSpacing: "0.1em" }}>REQUEST DETAIL</span>
                 <button onClick={() => setSelected(null)} style={{
                   background: "none", border: "none", color: "#4a4a6a",
-                  cursor: "pointer", fontSize: "16px", lineHeight: 1
+                  cursor: "pointer", fontSize: "16px", lineHeight: 1,
                 }}>✕</button>
               </div>
 
@@ -331,6 +418,8 @@ export default function App() {
         ::-webkit-scrollbar-track { background: #0d0d14; }
         ::-webkit-scrollbar-thumb { background: #2a2a3e; border-radius: 2px; }
         @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.3; } }
+        input::placeholder { color: #4a4a6a; }
+        input:focus { border-color: #7c3aed !important; }
       `}</style>
     </div>
   );
@@ -339,10 +428,8 @@ export default function App() {
 function StatCard({ label, value }) {
   return (
     <div style={{
-      background: "#0d0d14",
-      border: "1px solid #1e1e30",
-      borderRadius: "8px",
-      padding: "12px 14px",
+      background: "#0d0d14", border: "1px solid #1e1e30",
+      borderRadius: "8px", padding: "12px 14px",
     }}>
       <div style={{ fontSize: "10px", color: "#4a4a6a", letterSpacing: "0.1em", marginBottom: "4px" }}>
         {label.toUpperCase()}
@@ -368,17 +455,10 @@ function CodeBlock({ content }) {
   try { formatted = JSON.stringify(JSON.parse(content), null, 2); } catch {}
   return (
     <pre style={{
-      background: "#0d0d14",
-      border: "1px solid #1e1e30",
-      borderRadius: "6px",
-      padding: "12px",
-      fontSize: "11px",
-      color: "#a0aec0",
-      overflowX: "auto",
-      whiteSpace: "pre-wrap",
-      wordBreak: "break-all",
-      maxHeight: "200px",
-      overflowY: "auto",
+      background: "#0d0d14", border: "1px solid #1e1e30",
+      borderRadius: "6px", padding: "12px", fontSize: "11px",
+      color: "#a0aec0", overflowX: "auto", whiteSpace: "pre-wrap",
+      wordBreak: "break-all", maxHeight: "200px", overflowY: "auto",
     }}>{formatted}</pre>
   );
 }
