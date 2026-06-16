@@ -1,59 +1,52 @@
-# 👻 Phantom
-### A Developer's Secret Weapon — API Traffic Recorder, Mocker & Chaos Injector
+# Phantom
 
-> *Sit between your frontend and backend. Watch everything. Control everything.*
+**A local reverse proxy for HTTP traffic recording, mocking, and fault injection.**
 
----
-
-## What is Phantom?
-
-Phantom is a **local reverse proxy** that intercepts every HTTP request your app makes, records it in real-time, and gives you a beautiful dashboard to inspect, replay, mock, and sabotage it — all without touching your actual backend.
-
-Think of it as **CCTV + a remote control** for your API traffic.
+Phantom sits transparently between your frontend and backend, capturing every request and response in real time. Use it to debug API calls, develop against a backend that doesn't exist yet, or test how your app handles failures — all from a local dashboard, with no traffic leaving your machine.
 
 ```
-Your App  →→→  👻 Phantom (port 8080)  →→→  Real Backend
-                      ↓
-               SQLite Database
-                      ↓
-             React Dashboard (port 5173)
+Your App  ──→  Phantom :8080  ──→  Real Backend
+                    │
+               SQLite DB
+                    │
+           Dashboard :5173
 ```
 
 ---
 
-## The Solution we are aiming for:
+## Why Phantom?
 
-| Situation | Without Phantom | With Phantom |
+| Scenario | Without Phantom | With Phantom |
 |---|---|---|
-| Backend isn't ready | You wait or hardcode fake data | Replay recorded real responses |
-| Can't reproduce a bug | Guess and beg users for screenshots | Replay the exact request that caused it |
-| Testing error handling | Break your real server 😬 | Inject errors safely with one click |
-| Slow API debugging | console.log everywhere | See every header, body, timing instantly |
-| Frontend-backend integration | Hope for the best | Mock any endpoint in seconds |
+| Backend isn't ready | Wait, or hardcode fake data | Serve recorded responses immediately |
+| Can't reproduce a bug | Guess from screenshots | Replay the exact request that caused it |
+| Testing error handling | Break production or staging | Inject errors safely with one click |
+| Debugging slow APIs | Scatter `console.log` everywhere | Inspect every header, body, and timing |
+| Frontend/backend integration | Hope both sides agree | Mock any endpoint in seconds |
 
 ---
 
 ## Features
 
-### 🔴 Traffic Recorder *(v1 — built first)*
-- Intercepts every HTTP request passing through port 8080
-- Records: method, URL, headers, request body, response body, status code, response time
-- Stores everything in a local SQLite database
-- Live dashboard updates every 2 seconds
+### Traffic Recorder *(available now)*
+- Intercepts all HTTP requests routed through port 8080
+- Captures method, URL, request headers and body, response headers and body, status code, and response time
+- Persists everything to a local SQLite database
+- Dashboard refreshes every 2 seconds with live traffic
 
-### 🟡 Mock Engine *(coming soon)*
-- Define fake responses for any endpoint
-- Phantom returns your mock instead of hitting the real backend
-- Perfect for offline development
+### Mock Engine *(coming soon)*
+- Define custom responses for any route
+- Phantom returns your mock; the real backend is never called
+- Ideal for offline development or testing edge cases
 
-### 🟠 Chaos Injector *(coming soon)*
-- Simulate slow responses (add artificial latency)
-- Force error responses (500, 404, 503)
-- Test how your app behaves when things go wrong
+### Chaos Injector *(coming soon)*
+- Add artificial latency to any request
+- Force specific HTTP error codes (500, 503, 404, etc.)
+- Validate your app's resilience without touching real infrastructure
 
-### 🟢 Traffic Replay *(coming soon)*
-- Click any recorded request and replay it instantly
-- Reproduce bugs with the exact same payload every time
+### Traffic Replay *(coming soon)*
+- Re-issue any captured request with one click
+- Reproduce bugs with bit-for-bit identical payloads
 
 ---
 
@@ -61,11 +54,10 @@ Your App  →→→  👻 Phantom (port 8080)  →→→  Real Backend
 
 | Layer | Technology |
 |---|---|
-| Proxy Core | Python + FastAPI |
-| HTTP Forwarding | httpx (async) |
-| Database | SQLite + SQLAlchemy (async) |
-| API Server | FastAPI + Uvicorn |
-| Dashboard | React + Vite + Tailwind CSS |
+| Proxy | Python · FastAPI · httpx (async) |
+| Storage | SQLite · SQLAlchemy (async) |
+| API server | FastAPI · Uvicorn |
+| Dashboard | React · Vite · Tailwind CSS |
 
 ---
 
@@ -74,20 +66,20 @@ Your App  →→→  👻 Phantom (port 8080)  →→→  Real Backend
 ```
 phantom/
 ├── backend/
-│   ├── main.py          # REST API (port 8000) — serves logs to the dashboard
-│   ├── proxy.py         # Reverse proxy (port 8080) — intercepts & records traffic
-│   ├── database.py      # SQLAlchemy models & DB setup
+│   ├── main.py           # REST API (port 8000) — serves log data to the dashboard
+│   ├── proxy.py          # Reverse proxy (port 8080) — intercepts and records traffic
+│   ├── database.py       # SQLAlchemy models and database setup
 │   ├── requirements.txt
-│   └── phantom.db       # Auto-created SQLite database
+│   └── phantom.db        # SQLite database (auto-created on first run)
 ├── frontend/
 │   ├── src/
-│   │   ├── App.jsx      # Main dashboard UI
+│   │   ├── App.jsx       # Dashboard UI
 │   │   └── main.jsx
 │   ├── package.json
 │   └── vite.config.js
-├── .env                 # Your config (TARGET_URL etc.)
+├── .env                  # Local configuration (TARGET_URL, etc.)
 ├── .env.example
-├── start.sh             # Linux/Mac: start all three services
+├── start.sh              # Starts all three services (Linux/macOS)
 └── README.md
 ```
 
@@ -96,147 +88,136 @@ phantom/
 ## Getting Started
 
 ### Prerequisites
+
 - Python 3.9+
 - Node.js 18+
 - pip
 
-### 1. Clone & Install
+### 1. Install dependencies
 
 ```bash
 git clone https://github.com/yourusername/phantom.git
 cd phantom
 
-# Install Python dependencies
-cd backend
-pip install -r requirements.txt
-cd ..
+# Python dependencies
+pip install -r backend/requirements.txt
 
-# Install frontend dependencies
-cd frontend
-npm install
-cd ..
+# Frontend dependencies
+cd frontend && npm install && cd ..
 ```
 
 ### 2. Configure your target
-
-Copy the example env file and set your backend URL:
 
 ```bash
 cp .env.example .env
 ```
 
-Open `.env` and set:
-```
+Open `.env` and set `TARGET_URL` to your backend:
+
+```env
 TARGET_URL=https://your-actual-backend.com
 ```
 
-> **Example:** If you're building a React app that normally talks to `https://api.myapp.com`, set `TARGET_URL=https://api.myapp.com`. Then point your React app to `http://localhost:8080` instead.
+Then point your frontend at `http://localhost:8080` instead of the real backend URL. Phantom will forward all requests transparently.
 
 ### 3. Start Phantom
 
-**On Linux/Mac:**
+**Linux / macOS:**
 ```bash
 bash start.sh
 ```
 
-**On Windows (run each in a separate terminal):**
+**Windows** — run each command in a separate terminal:
 
-Terminal 1 — Proxy:
 ```bash
-cd backend
-uvicorn proxy:app --port 8080 --reload
-```
+# Terminal 1 — Proxy
+cd backend && uvicorn proxy:app --port 8080 --reload
 
-Terminal 2 — API:
-```bash
-cd backend
-uvicorn main:app --port 8000 --reload
-```
+# Terminal 2 — API server
+cd backend && uvicorn main:app --port 8000 --reload
 
-Terminal 3 — Dashboard:
-```bash
-cd frontend
-npm run dev
+# Terminal 3 — Dashboard
+cd frontend && npm run dev
 ```
 
 ### 4. Open the dashboard
 
-Go to **http://localhost:5173** in your browser.
+Visit **[http://localhost:5173](http://localhost:5173)**.
 
-Now send any request to `http://localhost:8080/your-endpoint` and watch it appear in the dashboard in real time.
+Send any request to `http://localhost:8080/<your-endpoint>` and it will appear in the dashboard within 2 seconds.
 
 ---
 
-## API Endpoints
+## API Reference
 
-These are Phantom's own REST endpoints for the dashboard:
+Phantom exposes a REST API for the dashboard. You can also query it directly.
 
 | Method | Endpoint | Description |
 |---|---|---|
-| `GET` | `/api/logs` | All recorded traffic, newest first (limit 200) |
-| `GET` | `/api/logs/{id}` | Full detail of one traffic entry |
+| `GET` | `/api/logs` | All recorded traffic, newest first (max 200) |
+| `GET` | `/api/logs/{id}` | Full detail for a single traffic entry |
 | `DELETE` | `/api/logs` | Clear all recorded logs |
-| `GET` | `/api/stats` | Total requests, avg response time, method breakdown |
+| `GET` | `/api/stats` | Request count, average response time, method breakdown |
 
 ---
 
-## Real-World Usage Example
+## Example
 
-Say you're building a React app that fetches user data from `https://api.github.com`.
+Proxying the GitHub API:
 
-**Step 1:** Set `TARGET_URL=https://api.github.com` in `.env`
+```bash
+# .env
+TARGET_URL=https://api.github.com
+```
 
-**Step 2:** Change your React app's base URL to `http://localhost:8080`
-
-**Step 3:** Use your app normally — browse, click, trigger API calls
-
-**Step 4:** Open `http://localhost:5173` — see every request recorded with full detail
-
-**Step 5:** When something breaks, click that request in Phantom and inspect exactly what was sent and received.
+Point your app at `http://localhost:8080`, then use it normally. Every API call will appear in the Phantom dashboard with full request and response detail, making it straightforward to trace exactly what your app is sending and receiving.
 
 ---
 
 ## Roadmap
 
-- [x] Traffic recorder with live dashboard
-- [ ] Mock endpoint builder (define fake responses per route)
-- [ ] Chaos injection (latency + error simulation)  
-- [ ] One-click traffic replay
-- [ ] Export recorded sessions as JSON / HAR format
-- [ ] Request filtering and search
-- [ ] Team mode (shared recording sessions)
+- [x] Live traffic recording and dashboard
+- [ ] Mock endpoint builder
+- [ ] Chaos injection (latency, forced errors)
+- [ ] One-click request replay
+- [ ] Export sessions as JSON / HAR
+- [ ] Request search and filtering
+- [ ] Shared recording sessions (team mode)
 
 ---
 
-## Why Phantom?
+## Alternatives
 
-Tools like this exist commercially:
+Phantom covers similar ground to commercial tools, without the cost or the cloud dependency:
 
-- **Proxyman** — $89 one-time
-- **WireMock Cloud** — enterprise pricing  
-- **Postman Interceptor** — requires paid plan
+| Tool | Price |
+|---|---|
+| Proxyman | $89 one-time |
+| WireMock Cloud | Enterprise pricing |
+| Postman Interceptor | Requires paid plan |
+| **Phantom** | **Free, open-source, self-hosted** |
 
-Phantom is **free, open-source, and self-hosted**. Your traffic never leaves your machine.
+Your traffic stays on your machine.
 
 ---
 
 ## Contributing
 
-Contributions welcome! Open an issue or submit a PR.
+Pull requests are welcome. To contribute:
 
-1. Fork the repo
-2. Create a feature branch: `git checkout -b feature/mock-engine`
-3. Commit your changes
-4. Open a pull request
+1. Fork the repository
+2. Create a feature branch: `git checkout -b feature/your-feature`
+3. Commit your changes with a clear message
+4. Open a pull request against `main`
+
+Please open an issue first for substantial changes so we can align on direction before you build.
 
 ---
 
 ## License
 
-MIT — do whatever you want with it.
+[MIT](LICENSE) — use it however you like.
 
 ---
 
-<div align="center">
-  Built with 🐍 Python + ⚛️ React &nbsp;|&nbsp; Made by developers, for developers
-</div>
+*Built with Python and React.*
